@@ -251,6 +251,9 @@ func (c *FailDetail) String() string {
 	if c.Field != "" {
 		return fmt.Sprintf("expect %s to be %s, actual: %s", c.Field, strconv.Quote(c.Expect), strconv.Quote(c.Actual))
 	}
+	if c.Expect != "" {
+		return fmt.Sprintf("expect %s, actual: %s", strconv.Quote(c.Expect), strconv.Quote(c.Actual))
+	}
 	// general fail message
 	return "fail"
 }
