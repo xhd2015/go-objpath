@@ -15,10 +15,8 @@ func main(){
             "B":"10",
         },
     }
-    ok,_ := objpath.Assert(m,`{"A.B":"10"}`)
-    fmt.Printf("assert:%v\n", ok)
-    // Output:
-    //   assert: true
+    objpath.Assert(m,`{"A.B":"10"}`)
+    // fail if A.B!=10
 }
 ```
 
