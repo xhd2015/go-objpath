@@ -10,6 +10,7 @@ import (
 
 type Object interface {
 	Value() interface{}
+	Method(name string) (method interface{}, ok bool)
 }
 
 type Primitive interface {
@@ -236,6 +237,9 @@ type base struct {
 func (c *base) String() string {
 	return fmt.Sprint(c.rv.Interface())
 }
+func (c *base) Method(name string) (method interface{}, ok bool) {
+	return MethodOf(c.rv, name)
+}
 
 type SPrimitive struct {
 	val interface{}
@@ -262,4 +266,118 @@ func (c *SPrimitive) StrValue() string {
 }
 func (c *SPrimitive) String() string {
 	return c.str
+}
+
+func (c *SPrimitive) Method(name string) (method interface{}, ok bool) {
+	if c.val == nil {
+		return nil, false
+	}
+	return MethodOf(reflect.ValueOf(c.val), name)
+}
+
+// c or *c
+func MethodOf(v reflect.Value, name string) (method interface{}, ok bool) {
+	if !v.IsValid() {
+		return
+	}
+	fn := v.MethodByName(name)
+	if fn.IsValid() {
+		method = fn.Interface()
+		ok = true
+		return
+	}
+	// check ptr
+	// if c.val is already a pointer
+	// then no try. since only non-pointer type can
+	// define a pointer receiver
+	if v.Kind() == reflect.Ptr {
+		return
+	}
+	pv := reflect.New(v.Type())
+	pv.Elem().Set(v)
+	fn = pv.MethodByName(name)
+	if fn.IsValid() {
+		method = fn.Interface()
+		ok = true
+		return
+	}
+	return
+}
+
+// CallFn make calls to fn
+func CallFn(fn interface{}, args []string) (res []interface{}, err error) {
+	fnv := reflect.ValueOf(fn)
+	fnType := fnv.Type()
+
+	argN := len(args)
+	n := fnType.NumIn()
+	variadic := fnType.IsVariadic()
+
+	// check length
+	if !variadic {
+		if argN != n {
+			err = fmt.Errorf("expecting %d args, actual: %d", n, argN)
+			return
+		}
+	} else {
+		if argN < n-1 {
+			err = fmt.Errorf("expecting at least %d args, actual: %d", n-1, argN)
+			return
+		}
+	}
+	var v reflect.Value
+	argsV := make([]reflect.Value, 0, len(args))
+
+	for i := 0; i < argN; i++ {
+		var t reflect.Type
+		if i < n-1 || !variadic {
+			t = fnType.In(i)
+		} else {
+			t = fnType.In(n - 1)
+		}
+		v, err = createArg(args[i], t)
+		if err != nil {
+			err = fmt.Errorf("parsing arg %d: %v", i, err)
+			return
+		}
+		argsV = append(argsV, v)
+	}
+
+	vals := fnv.Call(argsV)
+	if len(vals) == 0 {
+		return
+	}
+	res = make([]interface{}, 0, len(vals))
+	for _, val := range vals {
+		res = append(res, val.Interface())
+	}
+	lastVal := vals[len(vals)-1]
+	if lastVal.Type().Implements(reflect.TypeOf((*error)(nil)).Elem()) {
+		lastErr := res[len(res)-1]
+		res = res[:len(res)-1]
+		if lastErr != nil {
+			err = lastErr.(error)
+			return
+		}
+	}
+	return
+}
+
+// we can parse int
+
+func createArg(arg string, typ reflect.Type) (reflect.Value, error) {
+	v := reflect.New(typ)
+	switch typ.Kind() {
+	case reflect.Int:
+		i, err := strconv.ParseInt(arg, 10, 64)
+		if err != nil {
+			return reflect.Value{}, fmt.Errorf("parsing number: %v %v", arg, err)
+		}
+		v.Elem().Set(reflect.ValueOf(int(i)))
+	case reflect.String:
+		v.Elem().Set(reflect.ValueOf(arg))
+	default:
+		return reflect.Value{}, fmt.Errorf("unrecognized type:%v %v", arg, typ)
+	}
+	return v.Elem(), nil
 }

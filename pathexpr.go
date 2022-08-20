@@ -8,11 +8,11 @@ import (
 )
 
 type pathExpr interface {
-	// `trimedObject` is trimmed
 	// example: original map: {"a.b.c":"1"} => {"b.c":"1"}
 	// ${prefix}.${field}
 	// or ${prefix}.*{}
-	Filter(children []Object) []Object
+	// Filter filter and navigate through candidates
+	Filter(candidates []Object) []Object
 }
 type literalField string
 type verbatim string
@@ -33,7 +33,12 @@ func (c literalField) Filter(objects []Object) []Object {
 		}
 		switch obj := obj.(type) {
 		case Primitive:
-			// ignore
+			if c == "$length" {
+				length := len(obj.StrValue())
+				n := strconv.FormatInt(int64(length), 10)
+				res = append(res, NewPrimitve(length, n))
+				continue
+			}
 		case Composite:
 			if c == "*" {
 				// a special version of *{}
@@ -51,8 +56,26 @@ func (c literalField) Filter(objects []Object) []Object {
 			if !hasWildcard {
 				v, ok := obj.GetChild(s)
 				if !ok {
+					// check if method matches
+					meth, ok := obj.Method(s)
+					if !ok {
+						continue
+					}
+					methRes, err := CallFn(meth, nil)
+					if err != nil {
+						panic(fmt.Errorf("call %s: %v", s, err))
+					}
+					if len(methRes) == 0 {
+						// no return
+						continue
+					}
+					if len(methRes) > 1 {
+						panic(fmt.Errorf("call %s returns more than 1 result:%d", s, len(methRes)))
+					}
+					res = append(res, NewObject(methRes[0]))
 					continue
 				}
+
 				res = append(res, v)
 			} else {
 				obj.RangeChildren(func(key string, child Object) bool {

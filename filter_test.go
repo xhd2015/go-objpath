@@ -1,355 +1,324 @@
 package objpath
 
 import (
-	"fmt"
 	"testing"
 )
 
-// go test -run TestFilterSimpleMap -v ./src/objpath
+type Options string
+
+const (
+	OptionFail Options = "fail"
+)
+
+func testAssert(t *testing.T, obj interface{}, filter string, assert string, opts ...Options) {
+	jsonFilter, err := parseJSONFilter(filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	val := NewObject(obj)
+	liveVals, res := jsonFilter.Filter([]Object{val}, val)
+	// t.Logf("live: %v", liveVals)
+	needPass := true
+	for _, opt := range opts {
+		if opt == OptionFail {
+			needPass = false
+			break
+		}
+	}
+	if needPass {
+		AssertOkT(t, "res ok", res.Ok())
+	} else {
+		AssertNotOkT(t, "res ok", !res.Ok())
+	}
+	AssertT(t, liveVals, assert)
+}
+
+// go test -run TestFilterSimpleMap -v ./
 func TestFilterSimpleMap(t *testing.T) {
-	filter, err := parseJSONFilter(`{
-		"a.b.c":23345
-	}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	val := NewObject(map[string]interface{}{
-		"a": map[string]interface{}{
-			"b": map[string]interface{}{
-				"c": 23345,
+	testAssert(t,
+		map[string]interface{}{
+			"a": map[string]interface{}{
+				"b": map[string]interface{}{
+					"c": 23345,
+				},
 			},
 		},
-	})
-
-	liveVals, err := filter.Filter([]Object{val}, val)
-	if err != nil {
-		t.Fatal(err)
-	}
-	valsStr := fmt.Sprint(liveVals)
-	expect := `[map[a:map[b:map[c:23345]]]]`
-	if valsStr != expect {
-		t.Fatalf("expect %s = %+v, actual:%+v", `valsStr`, expect, valsStr)
-	}
+		`{
+			"a.b.c":23345
+		}`,
+		`{"0.Value.a.b.c":"23345"}`,
+	)
 }
 
-// go test -run TestFilterMultiConditions -v ./src/objpath
+// go test -run TestFilterMultiConditions -v ./
 func TestFilterMultiConditions(t *testing.T) {
-	filter, err := parseJSONFilter(`{
-		"a.b.c":"23345",
-		"a.d":{
-			"$gt":"100"
-		}
-	}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	val := NewObject(map[string]interface{}{
-		"a": map[string]interface{}{
-			"b": map[string]interface{}{
-				"c": 23345,
+	testAssert(t,
+		map[string]interface{}{
+			"a": map[string]interface{}{
+				"b": map[string]interface{}{
+					"c": 23345,
+				},
+				"d": "123",
 			},
-			"d": "123",
 		},
-	})
-
-	liveVals, err := filter.Filter([]Object{val}, val)
-	if err != nil {
-		t.Fatal(err)
-	}
-	valsStr := fmt.Sprint(liveVals)
-	expect := `[map[a:map[b:map[c:23345] d:123]]]`
-	if valsStr != expect {
-		t.Fatalf("expect %s = %+v, actual:%+v", `valsStr`, expect, valsStr)
-	}
+		`{
+			"a.b.c":"23345",
+			"a.d":{
+				"$gt":"100"
+			}
+		}`,
+		`{
+			"0.Value.a.b.c":"23345",
+			"0.Value.a.d":123
+		}`,
+	)
 }
 
-// go test -run TestFilterNonMatch -v ./src/objpath
+// go test -run TestFilterNonMatch -v ./
 func TestFilterNonMatch(t *testing.T) {
-	filter, err := parseJSONFilter(`{
-		"a.b.c":"23345",
-		"a.d":{
-			"$contains":"2BB_4"
-		}
-	}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	val := NewObject(map[string]interface{}{
-		"a": map[string]interface{}{
-			"b": map[string]interface{}{
-				"c": 23345,
-			},
-			"d": "1_2BB_3",
-		},
-	})
-
-	liveVals, err := filter.Filter([]Object{val}, val)
-	if err != nil {
-		t.Fatal(err)
-	}
-	valsStr := fmt.Sprint(liveVals)
-	expect := `[]`
-	if valsStr != expect {
-		t.Fatalf("expect %s = %+v, actual:%+v", `valsStr`, expect, valsStr)
-	}
-}
-
-// go test -run TestFilterWildcard -v ./src/objpath
-func TestFilterWildcard(t *testing.T) {
-	filter, err := parseJSONFilter(`{
-		"a.b.*":"23345",
-		"a.d.*":{
-			"$contains":"234"
-		}
-	}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	val := NewObject(map[string]interface{}{
-		"a": map[string]interface{}{
-			"b": map[string]interface{}{
-				"c": 23345,
-			},
-			"d": map[string]interface{}{
-				// "123",
-				"e": "234",
-				"f": "1234",
+	testAssert(t,
+		map[string]interface{}{
+			"a": map[string]interface{}{
+				"b": map[string]interface{}{
+					"c": 23345,
+				},
+				"d": "1_2BB_3",
 			},
 		},
-	})
-
-	liveVals, err := filter.Filter([]Object{val}, val)
-	if err != nil {
-		t.Fatal(err)
-	}
-	valsStr := len(liveVals)
-	expect := 1
-	if valsStr != expect {
-		t.Fatalf("expect %s = %+v, actual:%+v", `valsStr`, expect, valsStr)
-	}
+		`{
+			"a.b.c":"23345",
+			"a.d":{
+				"$contains":"2BB_4"
+			}
+		}`,
+		`{
+			"$length":"0"
+		}`,
+		OptionFail,
+	)
 }
 
-// go test -run TestFilterWildcardNotAny -v ./src/objpath
+// go test -run TestFilterWildcardMatch -v ./
+func TestFilterWildcardMatch(t *testing.T) {
+	testAssert(t,
+		map[string]interface{}{
+			"a": map[string]interface{}{
+				"b": map[string]interface{}{
+					"c": 23345,
+				},
+				"d": map[string]interface{}{
+					// "123",
+					"e": "234",
+					"f": "1234",
+				},
+			},
+		},
+		`{
+			"a.b.*":"23345",
+			"a.d.*":{
+				"$contains":"234"
+			}
+		}`,
+		`{
+			"$length":"1"
+		}`,
+	)
+}
+
+// go test -run TestFilterWildcardNotAny -v ./
 func TestFilterWildcardNotAny(t *testing.T) {
-	filter, err := parseJSONFilter(`{
-		"a.b.*":"23345",
-		"a.d.*":{
-			"$contains":"1x234"
-		}
-	}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	val := NewObject(map[string]interface{}{
-		"a": map[string]interface{}{
-			"b": map[string]interface{}{
-				"c": 23345,
-			},
-			"d": map[string]interface{}{
-				"e": "234",
-				"f": "1234",
+	testAssert(t,
+		map[string]interface{}{
+			"a": map[string]interface{}{
+				"b": map[string]interface{}{
+					"c": 23345,
+				},
+				"d": map[string]interface{}{
+					"e": "234",
+					"f": "1234",
+				},
 			},
 		},
-	})
-
-	liveVals, err := filter.Filter([]Object{val}, val)
-	if err != nil {
-		t.Fatal(err)
-	}
-	valsStr := len(liveVals)
-	expect := 0
-	if valsStr != expect {
-		t.Fatalf("expect %s = %+v, actual:%+v", `valsStr`, expect, valsStr)
-	}
+		`{
+			"a.b.*":"23345",
+			"a.d.*":{
+				"$contains":"1x234"
+			}
+		}`,
+		`{
+			"$length":"0"
+		}`,
+		OptionFail,
+	)
 }
 
-// go test -run TestFilterNestedNonMatch -v ./src/objpath
+// go test -run TestFilterNestedNonMatch -v ./
 func TestFilterNestedNonMatch(t *testing.T) {
-	filter, err := parseJSONFilter(`{
-		"a":{
-			"b":{
-				"c":"23345"
-			},
-			"d":{
-				"e":"2345"
-			}
-		}
-	}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	val := NewObject(map[string]interface{}{
-		"a": map[string]interface{}{
-			"b": map[string]interface{}{
-				"c": 23345,
-			},
-			"d": map[string]interface{}{
-				"e": "234",
-				"f": "1234",
+	testAssert(t,
+		map[string]interface{}{
+			"a": map[string]interface{}{
+				"b": map[string]interface{}{
+					"c": 23345,
+				},
+				"d": map[string]interface{}{
+					"e": "234",
+					"f": "1234",
+				},
 			},
 		},
-	})
-
-	liveVals, err := filter.Filter([]Object{val}, val)
-	if err != nil {
-		t.Fatal(err)
-	}
-	valsStr := len(liveVals)
-	expect := 0
-	if valsStr != expect {
-		t.Fatalf("expect %s = %+v, actual:%+v", `valsStr`, expect, valsStr)
-	}
+		`{
+			"a":{
+				"b":{
+					"c":"23345"
+				},
+				"d":{
+					"e":"2345"
+				}
+			}
+		}`,
+		`{
+			"$length":"0"
+		}`,
+		OptionFail,
+	)
 }
 
-// go test -run TestFilterNestedHasMatch -v ./src/objpath
+// go test -run TestFilterNestedHasMatch -v ./
 func TestFilterNestedHasMatch(t *testing.T) {
-	filter, err := parseJSONFilter(`{
-		"a":{
-			"b":{
-				"c":"23345"
+	testAssert(t,
+		map[string]interface{}{
+			"a": map[string]interface{}{
+				"b": map[string]interface{}{
+					"c": 23345,
+				},
+				"d": map[string]interface{}{
+					"e": "234",
+					"f": "1234",
+				},
 			},
-			"d":{
-				"e":"234",
-				"f":"1234"
+		},
+		`{
+			"a":{
+				"b":{
+					"c":"23345"
+				},
+				"d":{
+					"e":"234",
+					"f":"1234"
+				}
 			}
-		}
-	}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	val := NewObject(map[string]interface{}{
-		"a": map[string]interface{}{
-			"b": map[string]interface{}{
-				"c": 23345,
-			},
-			"d": map[string]interface{}{
-				"e": "234",
-				"f": "1234",
-			},
-		},
-	})
-
-	liveVals, err := filter.Filter([]Object{val}, val)
-	if err != nil {
-		t.Fatal(err)
-	}
-	valsStr := len(liveVals)
-	expect := 1
-	if valsStr != expect {
-		t.Fatalf("expect %s = %+v, actual:%+v", `valsStr`, expect, valsStr)
-	}
+		}`,
+		`{
+			"$length":"1"
+		}`,
+	)
 }
 
-// go test -run TestFilterRefOtherPart -v ./src/objpath
+// go test -run TestFilterRefOtherPart -v ./
 func TestFilterRefOtherPart(t *testing.T) {
-	filter, err := parseJSONFilter(`{
-		"a.b.c":{
-			"$gt":"$.a.d.*"
-		}
-	}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	val := NewObject(map[string]interface{}{
-		"a": map[string]interface{}{
-			"b": map[string]interface{}{
-				"c": 23345,
-			},
-			"d": map[string]interface{}{
-				"e": "234",
-				"f": "1234",
+	testAssert(t,
+		map[string]interface{}{
+			"a": map[string]interface{}{
+				"b": map[string]interface{}{
+					"c": 23345,
+				},
+				"d": map[string]interface{}{
+					"e": "234",
+					"f": "1234",
+				},
 			},
 		},
-	})
-
-	liveVals, err := filter.Filter([]Object{val}, val)
-	if err != nil {
-		t.Fatal(err)
-	}
-	valsStr := len(liveVals)
-	expect := 1
-	if valsStr != expect {
-		t.Fatalf("expect %s = %+v, actual:%+v", `valsStr`, expect, valsStr)
-	}
+		`{
+			"a.b.c":{
+				"$gt":"$.a.d.*"
+			}
+		}`,
+		`{
+			"$length":"1"
+		}`,
+	)
 }
 
-// go test -run TestFilterFlattenSimple -v ./src/objpath
+// go test -run TestFilterFlattenSimple -v ./
 func TestFilterFlattenSimple(t *testing.T) {
-	filter, err := parseJSONFilter(`{
-		"#a.b.[c.f]":"=> ok",
-		"#a.b[c.f]":"ok",
-		"a.b.[c.d]":{
-			"$endsWith":"45"
-		}
-	}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	val := NewObject(map[string]interface{}{
-		"a": map[string]interface{}{
-			"b": map[string]interface{}{
-				"c.d": 23345,
-				"c.f": "445",
-			},
-			"d": map[string]interface{}{
-				"e": "234",
-				"f": "1234",
+	testAssert(t,
+		map[string]interface{}{
+			"a": map[string]interface{}{
+				"b": map[string]interface{}{
+					"c.d": 23345,
+					"c.f": "445",
+				},
+				"d": map[string]interface{}{
+					"e": "234",
+					"f": "1234",
+				},
 			},
 		},
-	})
-
-	liveVals, err := filter.Filter([]Object{val}, val)
-	if err != nil {
-		t.Fatal(err)
-	}
-	valsStr := len(liveVals)
-	expect := 1
-	if valsStr != expect {
-		t.Fatalf("expect %s = %+v, actual:%+v", `valsStr`, expect, valsStr)
-	}
+		`{
+			"#a.b.[c.f]":"=> ok",
+			"#a.b[c.f]":"ok",
+			"a.b.[c.d]":{
+				"$endsWith":"45"
+			}
+		}`,
+		`{
+			"$length":"1"
+		}`,
+	)
 }
 
-// NOTE: currently only support suffix or prefix glob
-// go test -run TestFilterFlattenWildcard -v ./src/objpath
-func TestFilterFlattenWildcard(t *testing.T) {
-	filter, err := parseJSONFilter(`{
-		"a.b.[c.*]":{
-			"$endsWith":"45"
-		}
-	}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	val := NewObject(map[string]interface{}{
-		"a": map[string]interface{}{
-			"b": map[string]interface{}{
-				"c.d": 23345,
-				"c.f": "4456",
-			},
-			"d": map[string]interface{}{
-				"e": "234",
-				"f": "1234",
+// go test -run TestFilterFlattenWildcardEactlyOneMatch -v ./
+func TestFilterFlattenWildcardEactlyOneMatch(t *testing.T) {
+	// for wildcard, only need one match means hit
+	testAssert(t,
+		map[string]interface{}{
+			"a": map[string]interface{}{
+				"b": map[string]interface{}{
+					// "c.dx": 233456,
+					"c.fx": "445",
+				},
+				"d": map[string]interface{}{
+					"e": "234",
+					"f": "1234",
+					// "c.x": "1456",
+				},
 			},
 		},
-	})
+		`{
+			"a.*.[c.*x]":{
+				"$endsWith":"45"
+			}
+		}`,
+		`{
+			"$length":"1"
+		}`,
+	)
+}
 
-	liveVals, err := filter.Filter([]Object{val}, val)
-	if err != nil {
-		t.Fatal(err)
-	}
-	valsStr := len(liveVals)
-	expect := 1
-	if valsStr != expect {
-		t.Fatalf("expect %s = %+v, actual:%+v", `valsStr`, expect, valsStr)
-	}
+// go test -run TestFilterFlattenWildcardOnlyOneForMultiFields -v ./
+func TestFilterFlattenWildcardOnlyOneForMultiFields(t *testing.T) {
+	// for wildcard, only need one match means hit
+	testAssert(t,
+		map[string]interface{}{
+			"a": map[string]interface{}{
+				"b": map[string]interface{}{
+					"c.dx": 233456,
+					"c.fx": "445",
+				},
+				"d": map[string]interface{}{
+					"e":   "234",
+					"f":   "1234",
+					"c.x": "1456",
+				},
+			},
+		},
+		`{
+			"a.*.[c.*x]":{
+				"$endsWith":"45"
+			}
+		}`,
+		`{
+			"$length":"1"
+		}`,
+	)
 }

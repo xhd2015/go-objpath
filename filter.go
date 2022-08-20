@@ -23,31 +23,30 @@ import (
 //      "B":"20"
 //   }
 //
-
 // ObjectFilter assert against a value
 type ObjectFilter interface {
-	Filter(v []Object, root Object) ([]Object, error)
+	Filter(v []Object, root Object) ([]Object, Result)
 }
 
 type StringAssert string
 
 // Check implements Assert
-func (c StringAssert) Filter(v []Object, root Object) ([]Object, error) {
+func (c StringAssert) Filter(v []Object, root Object) ([]Object, Result) {
 	return filterPrimitive(string(c), v, root, func(curVal, incomingVal string) bool {
 		return curVal == incomingVal
 	})
 }
 
-func filterPrimitive(incomingValOrExpr string, curVals []Object, root Object, check func(curVal string, incomingVal string) bool) ([]Object, error) {
-	if len(curVals) == 0 {
+func filterPrimitive(expectVal string, actualVals []Object, root Object, check func(actualVal string, expectVal string) bool) ([]Object, Result) {
+	if len(actualVals) == 0 {
 		return nil, nil
 	}
-	s := incomingValOrExpr
-	if strings.HasPrefix(s, "$.") {
-		path := s[len("$."):]
+	var errRes Result
+	if strings.HasPrefix(expectVal, "$.") {
+		path := expectVal[len("$."):]
 		objs, err := QueryObject(root, path)
 		if err != nil {
-			return nil, fmt.Errorf("query path error:%v %v", s, err)
+			return nil, Result{{BadSyntax: fmt.Sprintf("query path:%v %v", expectVal, err)}}
 		}
 		// no value found,return nil
 		if len(objs) == 0 {
@@ -56,7 +55,7 @@ func filterPrimitive(incomingValOrExpr string, curVals []Object, root Object, ch
 		// both must be primitive
 		// if map to multiple values, each value must be tested
 		res := make([]Object, 0)
-		for _, o := range curVals {
+		for _, o := range actualVals {
 			prim, ok := o.(Primitive)
 			if !ok {
 				continue
@@ -64,8 +63,22 @@ func filterPrimitive(incomingValOrExpr string, curVals []Object, root Object, ch
 			matchAll := true
 			for _, obj := range objs {
 				objPrim, ok := obj.(Primitive)
-				if !ok || !check(prim.StrValue(), objPrim.StrValue()) {
+				if !ok {
 					matchAll = false
+					errRes.Append(&FailDetail{
+						Expect: fmt.Sprintf("<%s => object>", expectVal),
+						Actual: prim.StrValue(),
+					})
+					break
+				}
+				primStr := prim.StrValue()
+				objPrimStr := objPrim.StrValue()
+				if !check(primStr, objPrimStr) {
+					matchAll = false
+					errRes.Append(&FailDetail{
+						Expect: objPrimStr,
+						Actual: primStr,
+					})
 					break
 				}
 			}
@@ -73,19 +86,44 @@ func filterPrimitive(incomingValOrExpr string, curVals []Object, root Object, ch
 				res = append(res, o)
 			}
 		}
-		return res, nil
+		if len(res) > 0 {
+			// clear debug errors
+			errRes = nil
+		}
+		return res, errRes
 	}
 	res := make([]Object, 0)
-	for _, o := range curVals {
+	for _, o := range actualVals {
+		// must be be simple primitive
 		prim, ok := o.(Primitive)
 		if !ok {
+			// speical properties like $length
+			act := "<object>"
+			if o == nil {
+				act = "null"
+			}
+			errRes.Append(&FailDetail{
+				Expect: expectVal,
+				Actual: act,
+			})
 			continue
 		}
-		if check(prim.StrValue(), s) {
+		actVal := prim.StrValue()
+
+		if check(actVal, expectVal) {
 			res = append(res, o)
+		} else {
+			errRes.Append(&FailDetail{
+				Expect: expectVal,
+				Actual: actVal,
+			})
 		}
 	}
-	return res, nil
+	if len(res) > 0 {
+		// clear debug errors
+		errRes = nil
+	}
+	return res, errRes
 }
 
 // == "A"
@@ -105,11 +143,28 @@ func filterPrimitive(incomingValOrExpr string, curVals []Object, root Object, ch
 //     for field, each currentObject[field]
 type CompositeFilter map[string]ObjectFilter
 
-func (c CompositeFilter) Filter(v []Object, root Object) ([]Object, error) {
-	res := make([]Object, 0)
-	for _, e := range v {
+func (c CompositeFilter) Filter(v []Object, root Object) ([]Object, Result) {
+	var errRes Result
+	objRes := make([]Object, 0)
+
+	assertAll := false
+	if false {
+		// TODO: support assert all
+		allFlag, ok := c["$all"]
+		if ok {
+			if allFlag, ok := allFlag.(StringAssert); ok && allFlag == "true" {
+				assertAll = true
+			}
+		}
+		_ = assertAll
+	}
+
+	for _, actVal := range v {
 		match := true
-		for key, filter := range c {
+		for key, expectFilter := range c {
+			if key == "$all" {
+				continue
+			}
 			key = strings.TrimSpace(key)
 			if key == "" {
 				continue
@@ -118,39 +173,82 @@ func (c CompositeFilter) Filter(v []Object, root Object) ([]Object, error) {
 				// comment
 				continue
 			}
-			var err error
+			var childErrRes Result
 			var objsByOp []Object
 			//  special
 			if key[0] == '$' {
 				// for special assert, the value must be a string
 				// otherwise
-				strVal, ok := filter.(StringAssert)
+				expectVal, ok := expectFilter.(StringAssert)
 				if !ok {
+					errRes.Append(&FailDetail{
+						Field:     key,
+						BadSyntax: fmt.Sprintf("expect value to be string, found object"),
+					})
 					match = false
 					break
 				}
-				objsByOp, err = filterPrimitive(string(strVal), []Object{e}, root, Op(key).Check)
+				// take special properties
+				argActVal := actVal
+				op := Op(key)
+				if key == "$length" {
+					op = "$eq"
+					switch e := actVal.(type) {
+					case Primitive:
+						n := len(e.StrValue())
+						argActVal = NewPrimitve(n, strconv.FormatInt(int64(n), 10))
+					case Composite:
+						argActVal = NewPrimitve(e.ChildrenLen(), strconv.FormatInt(int64(e.ChildrenLen()), 10))
+					}
+				}
+				objsByOp, childErrRes = filterPrimitive(string(expectVal), []Object{argActVal}, root, op.Check)
 			} else {
 				var objs []Object
-				objs, err = QueryObject(e, key)
-				if err != nil {
-					return nil, err
+				var qerr error
+				objs, qerr = QueryObject(actVal, key)
+				if qerr != nil {
+					errRes.Append(&FailDetail{
+						Field:     key,
+						BadSyntax: fmt.Sprintf("query path:%v %v", key, qerr),
+					})
+					match = false
+					break
 				}
-				objsByOp, err = filter.Filter(objs, root)
+				objsByOp, childErrRes = expectFilter.Filter(objs, root)
 			}
-			if err != nil {
-				return nil, err
+			for _, childErr := range childErrRes {
+				if childErr.Field != "" {
+					childErr.Field = key + "." + childErr.Field
+				} else {
+					childErr.Field = key
+				}
 			}
+			errRes.Append(childErrRes...)
+
 			if len(objsByOp) == 0 {
+				if childErrRes.Ok() {
+					// if no child res, add reason
+					errRes.Append(&FailDetail{
+						Field: key,
+					})
+				}
 				match = false
 				break
 			}
 		}
+
 		if match {
-			res = append(res, e)
+			if assertAll {
+				// check uncovered primitive keys
+			}
+			objRes = append(objRes, actVal)
 		}
 	}
-	return res, nil
+	if len(objRes) > 0 {
+		// clear debug errors
+		errRes = nil
+	}
+	return objRes, errRes
 }
 
 type Op string
