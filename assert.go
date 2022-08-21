@@ -76,7 +76,7 @@ func CheckOk(str string, v bool) Result {
 	return nil
 }
 func CheckNotOk(str string, v bool) Result {
-	if !v {
+	if v {
 		return Result{{Field: str, Expect: "false", Actual: "true"}}
 	}
 	return nil
